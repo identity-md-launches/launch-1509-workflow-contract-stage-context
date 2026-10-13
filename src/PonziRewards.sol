@@ -9,10 +9,11 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 contract PonziRewards is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    uint256 public constant INITIAL_FUNDING = 700_000_000 ether;
     uint256 public constant ROUND_REWARD = 1_000_000 ether;
     uint256 public constant PHARAOH_REWARD = 300_000 ether;
     uint256 public constant PARTICIPANT_REWARD = 700_000 ether;
+    /// @dev The launch token's fixed supply: no funding gate above it could ever be met.
+    uint256 public constant TOKEN_SUPPLY = 1_000_000_000 ether;
 
     struct RewardRound {
         bool reserved;
@@ -25,6 +26,10 @@ contract PonziRewards is ReentrancyGuard {
 
     IERC20 public immutable token;
     address public immutable game;
+    /// @notice The creator allocation the pool must hold once before any round can start.
+    /// @dev Set per launch from the policy's payer share rather than compiled in, so the gate
+    ///      matches what the funding wallet actually receives. Still immutable after deployment.
+    uint256 public immutable INITIAL_FUNDING;
     bool public fundingReached;
     uint256 public committed;
     uint256 public totalFunded;
@@ -35,6 +40,7 @@ contract PonziRewards is ReentrancyGuard {
     error OnlyGame();
     error InvalidAddress();
     error InvalidAmount();
+    error InvalidInitialFunding();
     error IncorrectTokenReceipt();
     error InitialFundingRequired();
     error InsufficientUncommittedTokens();
@@ -56,10 +62,14 @@ contract PonziRewards is ReentrancyGuard {
         uint256 indexed roundId, address indexed player, address indexed recipient, uint256 amount
     );
 
-    constructor(address token_, address game_) {
+    /// @param initialFunding_ The creator allocation in minor units; at least one round reward and
+    ///        at most the token supply, so the gate can be both meaningful and satisfiable.
+    constructor(address token_, address game_, uint256 initialFunding_) {
         if (token_ == address(0) || game_ == address(0)) revert InvalidAddress();
+        if (initialFunding_ < ROUND_REWARD || initialFunding_ > TOKEN_SUPPLY) revert InvalidInitialFunding();
         token = IERC20(token_);
         game = game_;
+        INITIAL_FUNDING = initialFunding_;
     }
 
     modifier onlyGame() {

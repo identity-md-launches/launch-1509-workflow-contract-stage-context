@@ -11,6 +11,11 @@
         "name": "owner_",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "creatorAllocation_",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "nonpayable"

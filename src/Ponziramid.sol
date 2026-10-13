@@ -116,11 +116,13 @@ contract Ponziramid is ReentrancyGuard {
     /// @notice Fully configures the game and creates its two immutable custody contracts.
     /// @dev Only CREATEs local bytecode; never calls the token or any pre-existing contract here.
     ///      token_ is the launch's $token; owner_ is $owner, never the factory or tx.origin.
-    constructor(address token_, address owner_) {
+    ///      creatorAllocation_ is the exact token amount the launch pays its funding wallet; the
+    ///      reward pool must hold it once before the first round can start.
+    constructor(address token_, address owner_, uint256 creatorAllocation_) {
         if (token_ == address(0) || owner_ == address(0)) revert InvalidAddress();
         owner = owner_;
         vault = new StoneVault(address(this));
-        rewards = new PonziRewards(token_, address(this));
+        rewards = new PonziRewards(token_, address(this), creatorAllocation_);
         emit CustodyCreated(address(vault), address(rewards));
     }
 

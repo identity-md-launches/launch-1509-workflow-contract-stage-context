@@ -10,7 +10,7 @@ Toolchain: Foundry **1.8.3**, Solidity **0.8.26**, Cancun, optimizer enabled wit
 | --- | --- |
 | `forge build` | Passed with the pinned compiler. |
 | `forge build --offline --force` | Passed rebuilding from the delivered source and vendored dependencies. |
-| `forge test -vv` | **53 reported tests passed**, zero failed/skipped, across eight suites. |
+| `forge test -vv` | **56 reported tests passed**, zero failed/skipped, across eight suites. |
 | `forge test --offline --threads 4 -vv` | Passed with parallel execution and offline dependency resolution. |
 | Parameter fuzz tests | 512 runs each for token transfers, brick price/wei allocation, and token participant rounding. |
 | Stateful solvency test | Four properties checked together; 128 runs × 128 generated handler calls = **16,384 calls**, zero unexpected reverts. Every run concludes by refunding all remaining Stone and claiming all earned ETH/tokens. |
@@ -24,18 +24,19 @@ Generated handler calls include explicit precondition skips when an action is no
 | Contract | Runtime bytes | Creation bytecode bytes (before arguments) |
 | --- | ---: | ---: |
 | `LaunchToken` | 1,722 | 2,613 |
-| `Ponziramid` | 7,044 | 14,388 |
+| `Ponziramid` | 7,044 | 14,596 |
 | `StoneVault` | 1,564 | 1,746 |
-| `PonziRewards` | 4,769 | 5,080 |
+| `PonziRewards` | 4,859 | 5,270 |
 
-All are below EIP-170's 24,576-byte runtime limit and EIP-3860's 49,152-byte initcode limit. The complete parent deployment, including its two address arguments, is 14,452 bytes. The parent initcode includes creation of both custody children. A PUSH-aware opcode scan of all four deployed runtimes found no `DELEGATECALL`, `CALLCODE`, or `SELFDESTRUCT`.
+All are below EIP-170's 24,576-byte runtime limit and EIP-3860's 49,152-byte initcode limit. The complete parent deployment, including its two address arguments and the creator-allocation amount, is 14,692 bytes. The parent initcode includes creation of both custody children. A PUSH-aware opcode scan of all four deployed runtimes found no `DELEGATECALL`, `CALLCODE`, or `SELFDESTRUCT`.
 
-`DeploymentTest` creates token and application through a CREATE2 probe, checks that the factory still holds the complete token supply after construction, verifies explicit ownership and child bindings, and independently deploys the game with a nonzero code-less token address to test empty-chain constructor compatibility. It does not simulate or claim a mainnet deployment.
+`DeploymentTest` creates token and application through a CREATE2 probe with the three manifest arguments, checks that the factory still holds the complete token supply after construction, verifies explicit ownership, the bound funding gate and child bindings, and independently deploys the game with a nonzero code-less token address to test empty-chain constructor compatibility. It does not simulate or claim a mainnet deployment.
 
 ## Success and failure coverage
 
 - Exact factory supply, metadata, transfers, allowance consumption, invalid receivers, overspending, and rejection of common mint/admin selectors.
-- Initial 700M funding threshold including one wei short, one-time threshold latching, direct donations, whole creator allocation deposit, permanent deposits, and immutable reward constants.
+- Initial funding threshold equal to the deployed creator allocation (700M in the fixture), including one wei short, one-time threshold latching, direct donations, whole creator allocation deposit, permanent deposits, and immutable reward constants.
+- The creator-allocation constructor argument: a game deployed with a 100M allocation starts its first round once the funding wallet deposits its entire 100M balance; the constructor rejects zero, less than one round reward and more than the token supply, accepts both bounds, exposes the value through `INITIAL_FUNDING`, and has no setter.
 - Reservation of all 700 funded rounds without claiming them; a 701st reservation fails until new funding arrives. Paying an old claim does not create new uncommitted funds.
 - Per-wallet cooldown, consecutive Pharaoh restrictions after withdrawal, exact price/round expectations, continuous price growth, timer resets, the seven-day cap, and exact expiry.
 - A 144-brick bank run deducting a complete 24-hour timer, and a surviving global wallet cooldown across the resulting round boundary.

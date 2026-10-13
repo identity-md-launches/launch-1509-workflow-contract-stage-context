@@ -29,7 +29,7 @@ contract BuildAndTimeTest is GameFixture {
     }
 
     function test_unfundedAndPartiallyFundedGameCannotStart() public {
-        Ponziramid unfunded = new Ponziramid(address(token), creator);
+        Ponziramid unfunded = new Ponziramid(address(token), creator, CREATOR_ALLOCATION);
         PonziRewards pool = unfunded.rewards();
         vm.expectRevert(PonziRewards.InitialFundingRequired.selector);
         vm.prank(alice);

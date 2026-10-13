@@ -4,6 +4,7 @@ pragma solidity 0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {GameFixture} from "./helpers/GameFixture.sol";
 import {PonziRewards} from "../src/PonziRewards.sol";
+import {Ponziramid} from "../src/Ponziramid.sol";
 import {LaunchToken} from "../src/LaunchToken.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -11,6 +12,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 contract RewardIntegrationTest is GameFixture {
     function test_creatorDepositIsWholeAllocationAndRecordedAsPermanentFunding() public view {
         assertEq(token.balanceOf(creator), 0);
+        assertEq(rewards.INITIAL_FUNDING(), CREATOR_ALLOCATION);
         assertEq(token.balanceOf(address(rewards)), 700_000_000 ether);
         assertEq(rewards.totalFunded(), 700_000_000 ether);
         assertEq(rewards.committed(), 0);
@@ -18,6 +20,27 @@ contract RewardIntegrationTest is GameFixture {
         assertTrue(rewards.isFunded());
         assertTrue(rewards.canReserveRound());
         assertEq(token.allowance(creator, address(rewards)), 0);
+    }
+
+    /// @dev A launch whose policy pays the funding wallet less than 70% still starts once that wallet
+    ///      deposits its entire balance, because the gate is the deployed allocation argument.
+    function test_gameDeployedWithASmallerAllocationStartsOnTheWalletsEntireBalance() public {
+        address funder = makeAddr("smaller-share-funder");
+        Ponziramid smallerGame = new Ponziramid(address(token), creator, 100_000_000 ether);
+        PonziRewards smallerPool = smallerGame.rewards();
+        token.transfer(funder, 100_000_000 ether);
+        vm.startPrank(funder);
+        token.approve(address(smallerPool), token.balanceOf(funder));
+        smallerPool.fund(token.balanceOf(funder));
+        vm.stopPrank();
+        assertEq(token.balanceOf(funder), 0);
+        assertTrue(smallerPool.isFunded());
+        assertTrue(smallerPool.canReserveRound());
+        vm.prank(alice);
+        smallerGame.build{value: 0.001 ether}(1, 0.001 ether);
+        assertEq(smallerGame.currentRound(), 1);
+        assertEq(smallerPool.committed(), 1_000_000 ether);
+        assertEq(smallerPool.uncommitted(), 99_000_000 ether);
     }
 
     function test_distinctParticipantsPharaohParticipationWithdrawalAndDust() public {
@@ -136,8 +159,27 @@ contract PonziRewardsUnitTest is Test {
     function setUp() public {
         token = new LaunchToken();
         // This test contract is the authorized game for isolated reservation/claim failure cases.
-        rewards = new PonziRewards(address(token), address(this));
+        rewards = new PonziRewards(address(token), address(this), 700_000_000 ether);
         player = makeAddr("player");
+    }
+
+    /// @dev The gate is whatever the launch pays the funding wallet, not a compiled-in 700M guess.
+    function test_thresholdFollowsTheConstructorAllocationForASmallerPayerShare() public {
+        PonziRewards smaller = new PonziRewards(address(token), address(this), 100_000_000 ether);
+        assertEq(smaller.INITIAL_FUNDING(), 100_000_000 ether);
+        token.approve(address(smaller), 100_000_000 ether);
+        smaller.fund(100_000_000 ether - 1);
+        assertFalse(smaller.isFunded());
+        vm.expectRevert(PonziRewards.InitialFundingRequired.selector);
+        smaller.reserveRound(1);
+        smaller.fund(1);
+        assertTrue(smaller.isFunded());
+        assertTrue(smaller.canReserveRound());
+        smaller.reserveRound(1);
+        assertEq(smaller.committed(), 1_000_000 ether);
+        assertEq(smaller.uncommitted(), 99_000_000 ether);
+        // The 700M figure is not special to a pool configured with a different allocation.
+        assertFalse(smaller.INITIAL_FUNDING() == rewards.INITIAL_FUNDING());
     }
 
     function _fund() internal {
@@ -287,7 +329,7 @@ contract RewardsTransferFailureTest is Test {
     function setUp() public {
         player = makeAddr("player");
         token = new AdversarialToken();
-        rewards = new PonziRewards(address(token), address(this));
+        rewards = new PonziRewards(address(token), address(this), 700_000_000 ether);
         token.approve(address(rewards), 700_000_000 ether);
         rewards.fund(700_000_000 ether);
         rewards.reserveRound(1);

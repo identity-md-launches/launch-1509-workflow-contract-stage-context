@@ -49,7 +49,7 @@ Claims and refunds accept a nonzero alternate recipient so a contract wallet wit
 | Earned brick ETH | `game.claimableBrickETH(brickId)` → `(dividends, finalizedDiamondPrize)` |
 | Credited Pharaoh/owner ETH | `game.ethCredit(wallet)` |
 | Reward pool | `token.balanceOf(rewards)`, `rewards.committed()`, `rewards.uncommitted()` |
-| Funding status | `rewards.isFunded()`, `rewards.fundingReached()`, `rewards.INITIAL_FUNDING()` |
+| Funding status | `rewards.isFunded()`, `rewards.fundingReached()`, `rewards.INITIAL_FUNDING()` (the deployed creator allocation, an immutable constructor value; read it rather than hard-coding 700M) |
 | Capacity for a new round | `rewards.canReserveRound()`; uncommitted tokens do not gate additional builds in an already-reserved round |
 | Creator's live token balance | `token.balanceOf(actualCreatorAllocationWallet)` from the launch handoff |
 | Token reward | `rewards.claimable(roundId, wallet)`, `participated`, `claimed`, `rounds` |
@@ -66,6 +66,6 @@ Index `RoundStarted`, `BrickPlaced`, `MortarAllocated`, `BrickDeactivated`, `Rou
 
 Use successful receipt logs and handle chain reorganizations; a submitted transaction is not a confirmed brick. Retain the funder's transaction hash from the actual `Funded` receipt. `totalFunded` counts successful `fund()` deposits only. Direct ERC-20 donations still count toward the balance threshold, but are represented by the token's `Transfer` logs, not a `Funded` event. The creator deposit should use `fund()` for an explicit auditable receipt.
 
-The initial funding threshold is a historical gate. `isFunded()` can be true before `fundingReached()` is latched if a direct transfer brought the balance to 700M; `reserveRound` latches it atomically. After rewards leave, balances below 700M are expected. The website must display the live numbers, not falsely report NOT FUNDED again. Depositing the creator allocation does not prevent that wallet from later buying/receiving/earning tokens; display its current balance without claiming a permanent zero-balance guarantee.
+The initial funding threshold is a historical gate equal to `rewards.INITIAL_FUNDING()`, the creator allocation written at deployment (700M for this launch's 70% share). `isFunded()` can be true before `fundingReached()` is latched if a direct transfer brought the balance to the threshold; `reserveRound` latches it atomically. After rewards leave, balances below the threshold are expected. The website must display the live numbers, not falsely report NOT FUNDED again. Depositing the creator allocation does not prevent that wallet from later buying/receiving/earning tokens; display its current balance without claiming a permanent zero-balance guarantee.
 
 Before Build, display the exact Stone (refundable), Mortar (non-refundable), price, and gas separately, along with the disclaimer in the README. Read-only watching needs no wallet. The frontend contribution is responsible for wallet-network checks, receipts, mobile/browser testing, accessibility, reduced motion, and the real deployment-address configuration.

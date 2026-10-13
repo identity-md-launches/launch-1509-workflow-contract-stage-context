@@ -8,6 +8,9 @@ import {StoneVault} from "../../src/StoneVault.sol";
 import {PonziRewards} from "../../src/PonziRewards.sol";
 
 abstract contract GameFixture is Test {
+    /// @dev The launch policy's 70% payer share, written into launch.json as the third argument.
+    uint256 internal constant CREATOR_ALLOCATION = 700_000_000 ether;
+
     LaunchToken internal token;
     Ponziramid internal game;
     StoneVault internal vault;
@@ -26,10 +29,10 @@ abstract contract GameFixture is Test {
         carol = makeAddr("carol");
         outsider = makeAddr("outsider");
         token = new LaunchToken();
-        game = new Ponziramid(address(token), creator);
+        game = new Ponziramid(address(token), creator, CREATOR_ALLOCATION);
         vault = game.vault();
         rewards = game.rewards();
-        token.transfer(creator, 700_000_000 ether);
+        token.transfer(creator, CREATOR_ALLOCATION);
         vm.startPrank(creator);
         token.approve(address(rewards), token.balanceOf(creator));
         rewards.fund(token.balanceOf(creator));
