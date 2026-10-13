@@ -1,0 +1,80 @@
+# PONZIRAMID contracts
+
+> A game. 90% of every brick is refundable, 10% is not. Prizes come from other players' fees. Not an investment.
+
+This is the **contract implementation contribution** for the Ethereum launch (chain ID 1). It includes source, tests, vendored dependencies, and ABI exports. The token's actual name is **PONZIRAMID**, symbol **PONZIRAM**; “PONZI” in the game brief refers to this token. There is no relationship to Pepe2Pepe.
+
+The separate manifest contributor writes `launch.json`. Independent review, publication, attestation, admission, deployment, creator funding, and the website follow this contribution. No mainnet transactions were sent here. Deployment addresses, receipts, and the creator's funding transaction hash do not yet exist in this deliverable; services must supply real receipts after launch.
+
+## Build and test
+
+Install Foundry and Solidity **0.8.26**, then run from this repository's root:
+
+```sh
+forge build
+forge test
+forge fmt --check
+```
+
+All Solidity dependencies are ordinary files in `lib/`; builds require no network once the pinned compiler is installed. No submodules, environment-dependent tests, FFI, filesystem cheatcodes, external RPC, or runtime downloads are used. `foundry.toml` pins Cancun, optimization, and `bytecode_hash = "none"`. See [dependency provenance](docs/DEPENDENCIES.md).
+
+The tests cover exact wei accounting; refunds during pauses and across rounds; failed ETH/token payments; duplicate and unauthorized actions; reentrancy; expiry and the seven-day cap; reward funding, depletion and dust; and deployment without pre-existing dependency code. The stateful suite mixes builds, withdrawals, claims, funding, time, pauses and finalization, checking solvency after each action and fully unwinding claims after each run. These are implementation checks, not an independent security audit.
+
+## Contracts and deployment parameters
+
+| Contract | Constructor | Role |
+| --- | --- | --- |
+| `LaunchToken` | None | Plain ERC-20; 18 decimals; exactly `1000000000000000000000000000` minor units minted once to its deployer (the factory). |
+| `Ponziramid` | `address token_`, `address owner_` | Game and Mortar accounting. Manifest arguments, in order: **`$token`, `$owner`**. |
+| `StoneVault` | `address game_` | Created by `Ponziramid` with its own address; dedicated principal ledger and refunds. |
+| `PonziRewards` | `address token_`, `address game_` | Created by `Ponziramid`; permanent token funding and verified participant claims. |
+
+Only `LaunchToken` and `Ponziramid` are top-level factory deployments. The manifest's application list contains **one** contract, `Ponziramid`. Its constructor uses `CREATE` with the included child bytecode to instantiate the vault and rewards pool and binds both to this game immutably. It makes **no call to the token or any pre-existing contract**, accepts no ETH, and needs no initialization transaction. This avoids future-address constructor references and any administrator-controlled wiring. Do not deploy extra standalone custody contracts or list the children as additional applications: they would not be the instances the game uses. Read `vault()` and `rewards()` and the `CustodyCreated` event for the real child addresses, and verify their source too.
+
+Use the launch's `$owner` for `owner_`. The factory and the transaction origin acquire no administrative power. All contracts are immutable, with no proxies, upgrades, delegate calls, self-destruct, configurable economic constants, emergency drains, or recovery functions. The launch token has no owner, extra mint, tax, pause, or blocklist.
+
+The factory alone handles the launch allocation: **10% swarm, 20% pool, 70% payer/creator allocation**. These contracts neither intercept nor receive any allocation at deployment. The pool is native ETH, fee **12500 (1.25%)**, tick spacing **60**, and the supplied manifest price is `79228162514264337593543950336`. The deployer derives the opening price from the policy's **10 ETH** market cap. The 1% trading fee for the payer and 0.25% for IMD are protocol responsibilities, separate from game Mortar. The factory supplies the LP, distributor, and pool initialization guard. See [the launch handoff](docs/LAUNCH_HANDOFF.md).
+
+## Game lifecycle
+
+1. **Fund.** Before the first round, the reward pool must hold at least **700,000,000 PONZIRAM**. Anyone can fund it permanently. The first threshold observation is latched: reward payouts below that balance do not turn the game off again. Every new round still reserves **1,000,000 uncommitted tokens** atomically with its first successful paid brick. Failed builds leave no reservation or round behind.
+2. **Build.** `quote()` returns the expected round, price, refundable Stone, and non-refundable Mortar, all in wei. Call `build(roundId, price)` with exactly that price as ETH. The first price each round is **0.001 ETH**; after each brick the next price is `floor(price × 1005 / 1000)`. A withdrawn brick does not undo the price increase or its place in the pyramid.
+3. **Order and timing.** Bricks have a global ID and a zero-based, sequential `indexInRound`. Indexing services use this confirmed order for the shared pyramid's bottom-up rendering. Each wallet waits **60 seconds** between builds, including across rounds, and the current Pharaoh cannot place consecutively, even after withdrawing. Each accepted placement sets expiry to the lesser of **now + 24 hours** and **round start + seven days**.
+4. **Withdraw Stone whenever needed.** Call `StoneVault.withdrawStone(brickId, recipient)` as the brick's owner. The entire recorded Stone is returned, independently of pause, reward funding, claims, settlement, or future deposits. Gas and Mortar are not refunded. A rejected payment reverts both the withdrawal and its game callback, preserving the credit; retry with an accepting recipient.
+5. **Expiry.** Before expiry, withdrawal deactivates that brick, freezes its earned dividends, forfeits its diamond-hands prize, and subtracts **ten minutes** from expiry. The timer saturates at the current timestamp rather than inventing a past expiry. The withdrawal that reaches expiry is excluded from the active snapshot; withdrawals at or after that timestamp keep their already-earned end-of-round eligibility. Old-round withdrawals never shorten a later round's timer.
+6. **Finalize.** At `timestamp >= expiresAt`, building stops. Anyone calls `finalize()`, even while paused. It records obligations without sending ETH or tokens or looping through players. **40% of the Tomb** goes to the last builder, **40%** to bricks active at expiry in proportion to their Stone, and **20%** seeds the next round. The last builder remains Pharaoh even if they withdrew their own Stone. If no bricks survive, the diamond-hands allocation also seeds the next round. Finalization is required before another round can begin; no automatic transaction is promised.
+7. **Claim.** `claimBrickETH` claims one owned brick's dividends and, after finalization, its diamond-hands prize. Claiming dividends mid-round leaves the brick active. `claimETH` pays the caller's Pharaoh credits and/or earned owner fees. `PonziRewards.claim` pays one round's token reward. All are pull claims, permit a claimant-selected recipient, prevent duplicate payment, and remain available indefinitely. Withdrawing Stone never forfeits an already-earned dividend or token participation share.
+
+There is no random winner: the last confirmed builder is Pharaoh. Bots, multiple wallets, validator timestamp latitude, censorship, and transaction ordering can influence the result. Wallet cooldowns do not provide identity or bot resistance. A stale round/price transaction reverts rather than silently buying on different terms. No token value, profit, liquidity, or return is guaranteed.
+
+## Accounting and rounding
+
+For brick price `P`, **Stone = `floor(P × 90 / 100)`** and **Mortar = `P − Stone`**. Sub-wei percentage fractions are therefore included in Mortar. The quote displays the exact amounts before purchase.
+
+Of Mortar `M`, the owner receives `floor(M / 10)`. Earlier active bricks share a budget of `floor(M / 2)`: each receives `floor(budget / activeBrickCount)` wei through a cumulative per-brick accumulator. The buying brick joins **after** this allocation and does not earn from itself. The rest goes to the Tomb, including split/division dust. When there are no earlier active bricks, their unused budget goes to the Tomb. Thus no wei disappears or relies on future deposits to become payable.
+
+At finalization, both the Pharaoh allocation and diamond pool are `floor(Tomb × 40 / 100)`; the remainder seeds the next round. Each eligible brick's diamond prize is `floor(diamondPool × brickStone / activeStoneAtExpiry)`. The pool stays reserved until all eligible bricks have settled their diamond claim. Only then is residual division dust added to `nextTomb`. If this happens during another round, that dust seeds the next round that starts; it does not rewrite an existing round's prize.
+
+For token rewards, the Pharaoh receives **300,000 tokens**, plus their participation share. **700,000 tokens** are divided equally among **distinct wallets that placed a brick**, regardless of brick count or subsequent withdrawal. Each participation share rounds down in token minor units; the exact leftover becomes uncommitted immediately at finalization. Nobody can change these constants. Unclaimed player rewards remain committed without expiry and cannot fund later rounds.
+
+Accounting boundaries:
+
+- `StoneVault.balance >= totalStone = sum(all unwithdrawn brick Stone)`. There is no owner withdrawal, loan, approval, swap, or investment path for principal.
+- The game retains only Mortar. Its accounted ETH is `totalMortarReceived − totalEthPaid`, equal to unclaimed dividends, outstanding diamond reserves, ETH credits, open Tombs, and `nextTomb`.
+- `PonziRewards.token.balanceOf(rewards) >= committed`. Only verified participant calls to `claim` can reduce the token balance. There is no funder refund, owner withdrawal, approval, admin transfer, or token recovery path.
+
+All normal ETH transfers to these contracts require a defined payable operation. Forced ETH or mistakenly sent unrelated assets do not create credits and cannot be rescued. Unclaimed balances never expire. If token funding is exhausted, new rounds stop; every existing Stone refund and earned claim remains available.
+
+## Administration
+
+The immutable owner earns the prescribed **10% of Mortar**, recorded as an ordinary pull credit. Their only administrative action is `setPaused(bool)`, which blocks new builds. They cannot stop refunds, claims, the clock, or permissionless finalization, edit rewards, change the token, replace the vault, modify prices/timers, or access principal. A pause can influence who remains the last builder; this is an explicit owner trust assumption. Owner-key loss cannot be repaired by these immutable contracts and can leave building paused.
+
+## After launch
+
+1. Services provide verified `LaunchToken` and `Ponziramid` addresses, deployment receipts, and the exact pool key. Read and verify `game.vault()` and `game.rewards()`. Publish these actual addresses, chain ID, source, ABI files, and receipts in the deployment handoff. The contract contribution creates no guessed addresses or receipts.
+2. The wallet that actually received the **70% creator allocation** approves `PonziRewards` for its **entire current PONZIRAM balance**, then calls `fund(that exact balance)` in one deposit transaction. The plain launch token has no permit, so a prior ERC-20 approval transaction is necessary. Funding cannot be undone. The initial 700M threshold must still be reached if that wallet disposed of tokens before funding; anyone may contribute the shortfall. The launch owner and allocation recipient must be read from the real launch handoff, not inferred from the factory address.
+3. Publish the real successful `Funded` transaction hash/link and amount. Verify the creator's token balance is zero, the pool balance is at least the threshold, and `isFunded()` / `canReserveRound()` are true before presenting a first Build. Never present a simulated test transaction as the funding receipt.
+4. The website displays **NOT FUNDED** while `isFunded()` is false. Afterwards, distinguish a current reserved round from insufficient uncommitted tokens for the next round. Show live reward balance, committed/uncommitted amounts, creator-wallet balance, funding transaction link, refundable Stone, earned ETH, Pharaoh, timer, and Tomb. Watching requires no wallet. Follow [the ABI guide](docs/ABI.md) for transactions, indexing, and amount formatting.
+5. Anyone may finalize an expired round; the operator/frontend can prompt users or run an unfunded reminder service. No keeper address, subscription, oracle, backend signer, initialization call, or owner-settable external service is needed.
+
+Independent adversarial review of the accepted source **and** later manifest is required before release. The subsequent frontend contribution owns the React/mobile/reduced-motion implementation, wallet/browser tests, IPFS site, and share image; they are not represented here as completed.
