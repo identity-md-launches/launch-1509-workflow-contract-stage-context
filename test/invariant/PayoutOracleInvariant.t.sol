@@ -52,7 +52,7 @@ contract PayoutOracleHandler is Test {
     uint256 public expectedNextTomb;
     uint256 public stoneHeld;
     uint256 public mortarHeld;
-    uint256 public tokensHeld = 700_000_000 ether;
+    uint256 public tokensHeld;
     uint256 public tokensCommitted;
     uint256 public vaultSurplus;
     uint256 public gameSurplus;
@@ -67,6 +67,8 @@ contract PayoutOracleHandler is Test {
         rewards = game_.rewards();
         token = token_;
         actors = actors_;
+        // The fixture's creator deposit, read rather than assumed so the oracle follows the deployed gate.
+        tokensHeld = token_.balanceOf(address(rewards));
         for (uint256 i; i < actors.length; ++i) {
             vm.deal(actors[i], 1_000_000 ether);
             ethBalance[actors[i]] = 1_000_000 ether;

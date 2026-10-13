@@ -157,7 +157,7 @@ contract FundingExhaustionTest is GameFixture {
             if (roundId != 700) _expireAndFinalize();
         }
         assertEq(rewards.uncommitted(), 0);
-        assertEq(rewards.committed(), 700_000_000 ether);
+        assertEq(rewards.committed(), CREATOR_ALLOCATION);
         assertFalse(rewards.canReserveRound());
 
         // A reservation funds the whole round, including later builders when no new round can be funded.
@@ -232,8 +232,192 @@ contract FundingExhaustionTest is GameFixture {
         vm.prank(outsider);
         rewards.fund(1);
         assertEq(token.allowance(outsider, address(rewards)), 1);
-        assertEq(rewards.totalFunded(), 700_000_000 ether);
-        assertEq(token.balanceOf(address(rewards)), 700_000_000 ether);
+        assertEq(rewards.totalFunded(), CREATOR_ALLOCATION);
+        assertEq(token.balanceOf(address(rewards)), CREATOR_ALLOCATION);
+    }
+}
+
+/// @dev The funding gate is now a constructor argument. These cases deploy fresh games with other
+/// allocations, so nothing here relies on the 700M fixture being the value the manifest writes.
+contract FundingGateArgumentTest is Test {
+    uint256 internal constant ROUND = 1_000_000 ether;
+    uint256 internal constant SUPPLY = 1e27;
+
+    LaunchToken internal token;
+    address internal owner;
+    address internal alice;
+    address internal bob;
+
+    function setUp() public {
+        vm.warp(1_000_000);
+        token = new LaunchToken();
+        owner = makeAddr("gate-owner");
+        alice = makeAddr("gate-alice");
+        bob = makeAddr("gate-bob");
+        vm.deal(alice, 10 ether);
+        vm.deal(bob, 10 ether);
+    }
+
+    /// forge-config: default.fuzz.runs = 1000
+    function testFuzz_roundsStartOnlyWhenThePoolHoldsTheWholeDeployedAllocation(
+        uint256 allocationSeed,
+        uint256 shortfallSeed,
+        bool shortfallIsDonated
+    ) public {
+        uint256 allocation = bound(allocationSeed, ROUND, SUPPLY);
+        uint256 shortfall = bound(shortfallSeed, 1, allocation);
+        Ponziramid game = new Ponziramid(address(token), owner, allocation);
+        PonziRewards pool = game.rewards();
+        assertEq(pool.INITIAL_FUNDING(), allocation);
+
+        // Everything but the shortfall arrives first, through whichever path the fuzzer did not pick last.
+        _supply(pool, allocation - shortfall, !shortfallIsDonated);
+        assertEq(token.balanceOf(address(pool)), allocation - shortfall);
+        assertFalse(pool.isFunded(), "one wei short must not count as funded");
+        assertFalse(pool.canReserveRound());
+        uint256 aliceBefore = alice.balance;
+        vm.expectRevert(PonziRewards.InitialFundingRequired.selector);
+        vm.prank(alice);
+        game.build{value: 0.001 ether}(1, 0.001 ether);
+        assertEq(alice.balance, aliceBefore, "a rejected start kept the payment");
+        assertEq(game.currentRound(), 0);
+        assertEq(game.brickCount(), 0);
+        assertEq(pool.committed(), 0);
+        assertFalse(pool.fundingReached());
+        assertEq(address(game.vault()).balance, 0);
+
+        _supply(pool, shortfall, shortfallIsDonated);
+        assertTrue(pool.isFunded());
+        assertTrue(pool.canReserveRound());
+        vm.prank(alice);
+        assertEq(game.build{value: 0.001 ether}(1, 0.001 ether), 1);
+        assertTrue(pool.fundingReached());
+        assertEq(game.currentRound(), 1);
+        assertEq(pool.committed(), ROUND);
+        assertEq(pool.uncommitted(), allocation - ROUND);
+        assertEq(pool.totalFunded(), shortfallIsDonated ? shortfall : allocation - shortfall);
+    }
+
+    /// forge-config: default.fuzz.runs = 1000
+    function testFuzz_allocationsOutsideTheMeaningfulRangeNeverDeploy(uint256 seed, bool below) public {
+        uint256 allocation = below ? bound(seed, 0, ROUND - 1) : bound(seed, SUPPLY + 1, type(uint256).max);
+        address nonzero = makeAddr("nonzero");
+        vm.expectRevert(PonziRewards.InvalidInitialFunding.selector);
+        new Ponziramid(address(token), owner, allocation);
+        vm.expectRevert(PonziRewards.InvalidInitialFunding.selector);
+        new PonziRewards(address(token), nonzero, allocation);
+        // Address validation runs first, so a bad allocation never masks a zero address and vice versa.
+        vm.expectRevert(PonziRewards.InvalidAddress.selector);
+        new PonziRewards(address(0), nonzero, allocation);
+        vm.expectRevert(Ponziramid.InvalidAddress.selector);
+        new Ponziramid(address(token), address(0), allocation);
+    }
+
+    function test_minimumGateFundsExactlyOneRoundAndLatchesThroughAnEmptyPool() public {
+        Ponziramid game = new Ponziramid(address(token), owner, ROUND);
+        PonziRewards pool = game.rewards();
+        _supply(pool, ROUND, true);
+        vm.prank(alice);
+        game.build{value: 0.001 ether}(1, 0.001 ether);
+        assertEq(pool.uncommitted(), 0);
+        assertFalse(pool.canReserveRound());
+        _expireAndFinalize(game);
+
+        // The gate was met once; the second round fails only for lack of uncommitted tokens.
+        vm.expectRevert(PonziRewards.InsufficientUncommittedTokens.selector);
+        vm.prank(bob);
+        game.build{value: 0.001 ether}(2, 0.001 ether);
+
+        vm.prank(alice);
+        assertEq(pool.claim(1, alice), ROUND);
+        assertEq(token.balanceOf(address(pool)), 0, "sole participant and Pharaoh takes the whole reward");
+        assertTrue(pool.fundingReached(), "the latch must survive a balance below the gate");
+        assertTrue(pool.isFunded());
+        assertEq(pool.committed(), 0);
+        vm.expectRevert(PonziRewards.InsufficientUncommittedTokens.selector);
+        vm.prank(bob);
+        game.build{value: 0.001 ether}(2, 0.001 ether);
+
+        _supply(pool, ROUND - 1, false);
+        vm.expectRevert(PonziRewards.InsufficientUncommittedTokens.selector);
+        vm.prank(bob);
+        game.build{value: 0.001 ether}(2, 0.001 ether);
+        _supply(pool, 1, true);
+        vm.prank(bob);
+        assertEq(game.build{value: 0.001 ether}(2, 0.001 ether), 2);
+        assertEq(game.currentRound(), 2);
+        assertEq(pool.committed(), ROUND);
+        assertEq(pool.uncommitted(), 0);
+        assertEq(pool.totalFunded(), ROUND + 1, "the donated top-up is held but not counted as funding");
+        assertEq(token.balanceOf(address(pool)), ROUND);
+    }
+
+    function test_maximumGateRequiresEveryTokenInExistenceAndDonationsCount() public {
+        Ponziramid game = new Ponziramid(address(token), owner, SUPPLY);
+        PonziRewards pool = game.rewards();
+        _supply(pool, SUPPLY - 1, true);
+        assertFalse(pool.isFunded());
+        vm.expectRevert(PonziRewards.InitialFundingRequired.selector);
+        vm.prank(alice);
+        game.build{value: 0.001 ether}(1, 0.001 ether);
+
+        // The last wei arrives as a plain transfer: funded by balance, but not yet latched.
+        _supply(pool, 1, false);
+        assertEq(token.balanceOf(address(this)), 0);
+        assertTrue(pool.isFunded());
+        assertFalse(pool.fundingReached());
+        assertEq(pool.totalFunded(), SUPPLY - 1);
+        vm.prank(alice);
+        game.build{value: 0.001 ether}(1, 0.001 ether);
+        assertTrue(pool.fundingReached(), "the first reservation latches a balance-met gate");
+        assertEq(pool.committed(), ROUND);
+        assertEq(pool.uncommitted(), SUPPLY - ROUND);
+    }
+
+    function test_gateIsPerPoolAndCannotBeChangedAfterDeployment() public {
+        Ponziramid small = new Ponziramid(address(token), owner, 2 * ROUND);
+        Ponziramid large = new Ponziramid(address(token), owner, 5 * ROUND);
+        _supply(small.rewards(), 5 * ROUND, true);
+        assertTrue(small.rewards().isFunded());
+        assertFalse(large.rewards().isFunded(), "another pool's balance never satisfies this gate");
+        vm.expectRevert(PonziRewards.InitialFundingRequired.selector);
+        vm.prank(alice);
+        large.build{value: 0.001 ether}(1, 0.001 ether);
+        vm.prank(alice);
+        small.build{value: 0.001 ether}(1, 0.001 ether);
+        _expireAndFinalize(small);
+
+        string[4] memory signatures = [
+            "setInitialFunding(uint256)",
+            "setCreatorAllocation(uint256)",
+            "initialize(uint256)",
+            "configure(address,uint256)"
+        ];
+        for (uint256 i; i < signatures.length; ++i) {
+            vm.prank(owner);
+            (bool ok,) = address(small.rewards()).call(abi.encodeWithSignature(signatures[i], ROUND, ROUND));
+            assertFalse(ok, signatures[i]);
+        }
+        assertEq(small.rewards().INITIAL_FUNDING(), 2 * ROUND);
+        assertEq(large.rewards().INITIAL_FUNDING(), 5 * ROUND);
+        assertEq(small.rewards().ROUND_REWARD(), ROUND);
+        assertEq(small.rewards().TOKEN_SUPPLY(), SUPPLY);
+        assertEq(token.balanceOf(address(large.rewards())), 0);
+    }
+
+    function _supply(PonziRewards pool, uint256 amount, bool viaFund) internal {
+        if (amount == 0) return;
+        if (viaFund) {
+            token.approve(address(pool), amount);
+            pool.fund(amount);
+        } else {
+            token.transfer(address(pool), amount);
+        }
+    }
+
+    function _expireAndFinalize(Ponziramid game) internal {
+        vm.warp(game.rounds(game.currentRound()).expiresAt);
+        game.finalize();
     }
 }
 
