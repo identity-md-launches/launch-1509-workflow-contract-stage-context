@@ -9,7 +9,7 @@
   "contracts": [
     {
       "contract": "Ponziramid",
-      "constructorArgs": ["$token", "$owner"]
+      "constructorArgs": ["$token", "$owner", "700000000000000000000000000"]
     }
   ],
   "pool": {
@@ -18,5 +18,5 @@
     "tickSpacing": 60,
     "initialPrice": "79228162514264337593543950336"
   },
-  "notes": "Ponziramid creates and permanently binds its StoneVault and PonziRewards during construction; their addresses are available through vault(), rewards() and CustodyCreated. They are not separate manifest deployments, and no initialization calls are required. The launch owner receives the game's owner Mortar fees and can pause building. StoneVault holds refundable player principal; PonziRewards holds permanent token funding and pays verified player claims. After deployment, the creator funds PonziRewards using an ERC-20 approval followed by fund(amount). The initial funding gate requires 700,000,000 PONZIRAM once; each new round requires 1,000,000 uncommitted PONZIRAM. No application receives tokens during construction. The factory supplies the LP, MerkleDistributor and initialization-only pool guard. The native ETH pool fee is 1.25%; the deployer derives the effective opening price from the policy's 10 ETH opening market cap."
+  "notes": "Ponziramid(address token_, address owner_, uint256 creatorAllocation_) creates and permanently binds its StoneVault and PonziRewards during construction; their addresses are available through vault(), rewards() and CustodyCreated. They are not separate manifest deployments, and no initialization calls are required. token_ is the launch token and owner_ is the launch's owner, who receives the game's owner Mortar fees and can pause building. creatorAllocation_ is 700000000000000000000000000 minor units (700,000,000 PONZIRAM), the 70% of the fixed supply this launch pays the wallet that funds the game; it is stored once as PonziRewards.INITIAL_FUNDING, the one-time funding gate, and grants no role. StoneVault holds refundable player principal; PonziRewards holds permanent token funding and pays verified player claims. After deployment, the creator funds PonziRewards using an ERC-20 approval followed by fund(amount). No round can start until PonziRewards has held INITIAL_FUNDING once; each new round then requires 1,000,000 uncommitted PONZIRAM. No application receives tokens during construction. The factory supplies the LP, MerkleDistributor and initialization-only pool guard. The native ETH pool fee is 1.25%; the deployer derives the effective opening price from the policy's 10 ETH opening market cap."
 }
